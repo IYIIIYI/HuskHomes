@@ -54,11 +54,6 @@ public class SqLiteDatabase extends Database {
      */
     private static final String DATABASE_FILE_NAME = "HuskHomesData.db";
 
-    /**
-     * The persistent SQLite database connection.
-     */
-    private Connection connection;
-
     public SqLiteDatabase(@NotNull HuskHomes plugin) {
         super(plugin);
         this.databaseFile = plugin.getConfigDirectory().resolve(DATABASE_FILE_NAME);
@@ -66,13 +61,6 @@ public class SqLiteDatabase extends Database {
 
     @NotNull
     private Connection getConnection() throws SQLException {
-        if (connection == null || connection.isClosed()) {
-            setConnection();
-        }
-        return connection;
-    }
-
-    private void setConnection() {
         try {
             // Ensure that the database file exists
             if (databaseFile.toFile().createNewFile()) {
@@ -89,16 +77,19 @@ public class SqLiteDatabase extends Database {
             config.setSynchronous(SQLiteConfig.SynchronousMode.FULL);
 
             // Establish the connection
-            connection = DriverManager.getConnection(
+            return DriverManager.getConnection(
                     String.format("jdbc:sqlite:%s", databaseFile.toAbsolutePath()),
                     config.toProperties()
             );
         } catch (IOException e) {
             plugin.log(Level.SEVERE, "An exception occurred creating the database file", e);
+            throw new SQLException("An exception occurred creating the database file");
         } catch (SQLException e) {
             plugin.log(Level.SEVERE, "An SQL exception occurred initializing the SQLite database", e);
+            throw e;
         } catch (ClassNotFoundException e) {
             plugin.log(Level.SEVERE, "Failed to load the necessary SQLite driver", e);
+            throw new SQLException("Failed to load the necessary SQLite driver");
         }
     }
 
@@ -114,9 +105,6 @@ public class SqLiteDatabase extends Database {
 
     @Override
     public void initialize() throws RuntimeException {
-        // Establish connection
-        this.setConnection();
-
         // Backup database file
         this.backupFlatFile(databaseFile);
 
@@ -205,7 +193,7 @@ public class SqLiteDatabase extends Database {
 
     @Override
     protected int setPosition(@NotNull Position position, @NotNull Connection connection) throws SQLException {
-        try (PreparedStatement statement = getConnection().prepareStatement(format("""
+        try (PreparedStatement statement = connection.prepareStatement(format("""
                 INSERT INTO `%position_data%`
                     (`x`,`y`,`z`,`yaw`,`pitch`,`world_name`,`world_uuid`,`server_name`)
                 VALUES
@@ -865,13 +853,16 @@ public class SqLiteDatabase extends Database {
 
         // Set the user's teleport into the database (if it's not null)
         if (teleport != null) {
-            try (PreparedStatement statement = getConnection().prepareStatement(format("""
+            try {
+                Connection connection = getConnection();
+                try (PreparedStatement statement = connection.prepareStatement(format("""
                     INSERT INTO `%teleport_data%` (`player_uuid`, `destination_id`, `type`)
                     VALUES (?,?,?);"""))) {
-                statement.setString(1, user.getUuid().toString());
-                statement.setInt(2, setPosition((Position) teleport.getTarget(), connection));
-                statement.setInt(3, teleport.getType().getTypeId());
-                statement.executeUpdate();
+                    statement.setString(1, user.getUuid().toString());
+                    statement.setInt(2, setPosition((Position) teleport.getTarget(), connection));
+                    statement.setInt(3, teleport.getType().getTypeId());
+                    statement.executeUpdate();
+                }
             } catch (SQLException e) {
                 plugin.log(Level.SEVERE, "Failed to set the current teleport of " + user.getName(), e);
             }
@@ -906,28 +897,31 @@ public class SqLiteDatabase extends Database {
 
     @Override
     public void setLastPosition(@NotNull User user, @NotNull Position position) {
-        try (PreparedStatement queryStatement = getConnection().prepareStatement(format("""
+        try {
+            Connection connection = getConnection();
+            try (PreparedStatement queryStatement = connection.prepareStatement(format("""
                 SELECT `last_position` FROM `%player_data%`
                 INNER JOIN `%position_data%` ON `%player_data%`.last_position = `%position_data%`.`id`
                 WHERE `uuid`=?;"""))) {
-            queryStatement.setString(1, user.getUuid().toString());
+                queryStatement.setString(1, user.getUuid().toString());
 
-            final ResultSet resultSet = queryStatement.executeQuery();
-            if (resultSet.next()) {
-                // Update the last position
-                updatePosition(resultSet.getInt("last_position"), position, connection);
-            } else {
-                // Set the last position
-                try (PreparedStatement updateStatement = getConnection().prepareStatement(format("""
+                final ResultSet resultSet = queryStatement.executeQuery();
+                if (resultSet.next()) {
+                    // Update the last position
+                    updatePosition(resultSet.getInt("last_position"), position, connection);
+                } else {
+                    // Set the last position
+                    try (PreparedStatement updateStatement = connection.prepareStatement(format("""
                         UPDATE `%player_data%`
                         SET `last_position`=?
                         WHERE `uuid`=?;"""))) {
-                    updateStatement.setInt(1, setPosition(position, connection));
-                    updateStatement.setString(2, user.getUuid().toString());
-                    updateStatement.executeUpdate();
+                        updateStatement.setInt(1, setPosition(position, connection));
+                        updateStatement.setString(2, user.getUuid().toString());
+                        updateStatement.executeUpdate();
+                    }
                 }
             }
-        } catch (SQLException e) {
+        } catch (SQLException e){
             plugin.log(Level.SEVERE, "Failed to set the last position of " + user.getName(), e);
         }
     }
@@ -961,25 +955,28 @@ public class SqLiteDatabase extends Database {
 
     @Override
     public void setOfflinePosition(@NotNull User user, @NotNull Position position) {
-        try (PreparedStatement queryStatement = getConnection().prepareStatement(format("""
+        try {
+            Connection connection = getConnection();
+            try (PreparedStatement queryStatement = connection.prepareStatement(format("""
                 SELECT `offline_position` FROM `%player_data%`
                 INNER JOIN `%position_data%` ON `%player_data%`.offline_position = `%position_data%`.`id`
                 WHERE `uuid`=?;"""))) {
-            queryStatement.setString(1, user.getUuid().toString());
+                queryStatement.setString(1, user.getUuid().toString());
 
-            final ResultSet resultSet = queryStatement.executeQuery();
-            if (resultSet.next()) {
-                // Update the offline position
-                updatePosition(resultSet.getInt("offline_position"), position, connection);
-            } else {
-                // Set the offline position
-                try (PreparedStatement updateStatement = getConnection().prepareStatement(format("""
+                final ResultSet resultSet = queryStatement.executeQuery();
+                if (resultSet.next()) {
+                    // Update the offline position
+                    updatePosition(resultSet.getInt("offline_position"), position, connection);
+                } else {
+                    // Set the offline position
+                    try (PreparedStatement updateStatement = connection.prepareStatement(format("""
                         UPDATE `%player_data%`
                         SET `offline_position`=?
                         WHERE `uuid`=?;"""))) {
-                    updateStatement.setInt(1, setPosition(position, connection));
-                    updateStatement.setString(2, user.getUuid().toString());
-                    updateStatement.executeUpdate();
+                        updateStatement.setInt(1, setPosition(position, connection));
+                        updateStatement.setString(2, user.getUuid().toString());
+                        updateStatement.executeUpdate();
+                    }
                 }
             }
         } catch (SQLException e) {
@@ -1015,44 +1012,47 @@ public class SqLiteDatabase extends Database {
 
     @Override
     public void setRespawnPosition(@NotNull User user, @Nullable Position position) {
-        try (PreparedStatement queryStatement = getConnection().prepareStatement(format("""
+        try {
+            Connection connection = getConnection();
+            try (PreparedStatement queryStatement = connection.prepareStatement(format("""
                 SELECT `respawn_position` FROM `%player_data%`
                 INNER JOIN `%position_data%` ON `%player_data%`.respawn_position = `%position_data%`.`id`
                 WHERE `uuid`=?;"""))) {
-            queryStatement.setString(1, user.getUuid().toString());
+                queryStatement.setString(1, user.getUuid().toString());
 
-            final ResultSet resultSet = queryStatement.executeQuery();
-            if (resultSet.next()) {
-                if (position == null) {
-                    // Delete a respawn position
-                    try (PreparedStatement deleteStatement = getConnection().prepareStatement(format("""
+                final ResultSet resultSet = queryStatement.executeQuery();
+                if (resultSet.next()) {
+                    if (position == null) {
+                        // Delete a respawn position
+                        try (PreparedStatement deleteStatement = connection.prepareStatement(format("""
                             DELETE FROM `%position_data%`
                             WHERE `id`=(
                                 SELECT `respawn_position`
                                 FROM `%player_data%`
                                 WHERE `%player_data%`.`uuid`=?
                             );"""))) {
-                        deleteStatement.setString(1, user.getUuid().toString());
-                        deleteStatement.executeUpdate();
+                            deleteStatement.setString(1, user.getUuid().toString());
+                            deleteStatement.executeUpdate();
+                        }
+                    } else {
+                        // Update the respawn position
+                        updatePosition(resultSet.getInt("respawn_position"), position, connection);
                     }
                 } else {
-                    // Update the respawn position
-                    updatePosition(resultSet.getInt("respawn_position"), position, connection);
-                }
-            } else {
-                if (position != null) {
-                    // Set a respawn position
-                    try (PreparedStatement updateStatement = getConnection().prepareStatement(format("""
+                    if (position != null) {
+                        // Set a respawn position
+                        try (PreparedStatement updateStatement = connection.prepareStatement(format("""
                             UPDATE `%player_data%`
                             SET `respawn_position`=?
                             WHERE `uuid`=?;"""))) {
-                        updateStatement.setInt(1, setPosition(position, connection));
-                        updateStatement.setString(2, user.getUuid().toString());
-                        updateStatement.executeUpdate();
+                            updateStatement.setInt(1, setPosition(position, connection));
+                            updateStatement.setString(2, user.getUuid().toString());
+                            updateStatement.executeUpdate();
+                        }
                     }
                 }
-            }
 
+            }
         } catch (SQLException e) {
             plugin.log(Level.SEVERE, "Failed to set the respawn position of " + user.getName(), e);
         }
@@ -1062,8 +1062,9 @@ public class SqLiteDatabase extends Database {
     public void saveHome(@NotNull Home home) {
         getHome(home.getUuid()).ifPresentOrElse(presentHome -> {
             try {
+                Connection connection = getConnection();
                 // Update the home's saved position, including metadata
-                try (PreparedStatement statement = getConnection().prepareStatement(format("""
+                try (PreparedStatement statement = connection.prepareStatement(format("""
                         SELECT `saved_position_id` FROM `%home_data%`
                         WHERE `uuid`=?;"""))) {
                     statement.setString(1, home.getUuid().toString());
@@ -1088,15 +1089,18 @@ public class SqLiteDatabase extends Database {
                         "Failed to update a home in the database for " + home.getOwner().getName(), e);
             }
         }, () -> {
-            try (PreparedStatement statement = getConnection().prepareStatement(format("""
+            try {
+                Connection connection = getConnection();
+                try (PreparedStatement statement = connection.prepareStatement(format("""
                     INSERT INTO `%home_data%` (`uuid`, `saved_position_id`, `owner_uuid`, `public`)
                     VALUES (?,?,?,?);"""))) {
-                statement.setString(1, home.getUuid().toString());
-                statement.setInt(2, setSavedPosition(home, connection));
-                statement.setString(3, home.getOwner().getUuid().toString());
-                statement.setBoolean(4, home.isPublic());
+                    statement.setString(1, home.getUuid().toString());
+                    statement.setInt(2, setSavedPosition(home, connection));
+                    statement.setString(3, home.getOwner().getUuid().toString());
+                    statement.setBoolean(4, home.isPublic());
 
-                statement.executeUpdate();
+                    statement.executeUpdate();
+                }
             } catch (SQLException e) {
                 plugin.log(Level.SEVERE, "Failed to set home for " + home.getOwner().getName(), e);
             }
@@ -1107,26 +1111,32 @@ public class SqLiteDatabase extends Database {
     public void saveWarp(@NotNull Warp warp) {
         getWarp(warp.getUuid())
                 .ifPresentOrElse(presentWarp -> {
-                    try (PreparedStatement statement = getConnection().prepareStatement(format("""
+                    try {
+                        Connection connection = getConnection();
+                        try (PreparedStatement statement = connection.prepareStatement(format("""
                             SELECT `saved_position_id` FROM `%warp_data%`
                             WHERE `uuid`=?;"""))) {
-                        statement.setString(1, warp.getUuid().toString());
+                            statement.setString(1, warp.getUuid().toString());
 
-                        final ResultSet resultSet = statement.executeQuery();
-                        if (resultSet.next()) {
-                            updateSavedPosition(resultSet.getInt("saved_position_id"), warp, connection);
+                            final ResultSet resultSet = statement.executeQuery();
+                            if (resultSet.next()) {
+                                updateSavedPosition(resultSet.getInt("saved_position_id"), warp, connection);
+                            }
                         }
                     } catch (SQLException e) {
                         plugin.log(Level.SEVERE, "Failed to update a warp in the database", e);
                     }
                 }, () -> {
-                    try (PreparedStatement statement = getConnection().prepareStatement(format("""
+                    try {
+                        Connection connection = getConnection();
+                        try (PreparedStatement statement = connection.prepareStatement(format("""
                             INSERT INTO `%warp_data%` (`uuid`, `saved_position_id`)
                             VALUES (?,?);"""))) {
-                        statement.setString(1, warp.getUuid().toString());
-                        statement.setInt(2, setSavedPosition(warp, connection));
+                            statement.setString(1, warp.getUuid().toString());
+                            statement.setInt(2, setSavedPosition(warp, connection));
 
-                        statement.executeUpdate();
+                            statement.executeUpdate();
+                        }
                     } catch (SQLException e) {
                         plugin.log(Level.SEVERE, "Failed to add a warp to the database", e);
                     }
@@ -1263,16 +1273,6 @@ public class SqLiteDatabase extends Database {
     }
 
     @Override
-    public void close() {
-        try {
-            if (connection != null) {
-                if (!connection.isClosed()) {
-                    connection.close();
-                }
-            }
-        } catch (SQLException e) {
-            plugin.log(Level.WARNING, "Failed to properly close the SQLite connection");
-        }
-    }
+    public void close() {}
 
 }
