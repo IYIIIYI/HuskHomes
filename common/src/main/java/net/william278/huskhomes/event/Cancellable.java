@@ -39,3 +39,4 @@ public interface Cancellable extends Event {
     boolean isCancelled();
 
 }
+
